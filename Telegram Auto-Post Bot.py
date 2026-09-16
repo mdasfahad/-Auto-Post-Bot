@@ -1,54 +1,64 @@
 import asyncio
 import logging
+import os
 import sqlite3
+
+from dotenv import load_dotenv
+
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command, CommandStart
-from aiogram.types import (
-    Message,
-    CallbackQuery,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.enums import ButtonStyle
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
 
 # =========================================================
 # CONFIG
 # =========================================================
 
-BOT_TOKEN = "8859541151:AAGx_QDI0b3oL4UmGT8-dqd7l01Knqk6wyY"
+load_dotenv()
 
-# Your Telegram Admin ID
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8859541151:AAGx_QDI0b3oL4UmGT8-dqd7l01Knqk6wyY")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@FreeIncome_TechBD)
+
+# তোমার Admin ID
 ADMIN_ID = 8289191009
 
-# Channel username or ID
-# Example: "@MyChannel"
-CHANNEL_ID = "@FreeIncome_TechBD"
+DB_FILE = "bot_database.db"
+
+
+# =========================================================
+# LOGGING
+# =========================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
 
 # =========================================================
 # DATABASE
 # =========================================================
 
-db = sqlite3.connect("bot.db")
+db = sqlite3.connect(DB_FILE)
 cursor = db.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS posts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    text TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)
-""")
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS buttons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    post_id INTEGER,
-    text TEXT,
-    url TEXT,
-    style TEXT DEFAULT 'primary'
+    text TEXT NOT NULL,
+    url TEXT NOT NULL,
+    style TEXT NOT NULL DEFAULT 'primary'
 )
 """)
 
@@ -56,32 +66,39 @@ db.commit()
 
 
 # =========================================================
-# BOT
+# BOT / DISPATCHER
 # =========================================================
 
-bot = Bot(BOT_TOKEN)
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(
+        parse_mode=ParseMode.HTML
+    )
+)
+
 dp = Dispatcher(storage=MemoryStorage())
 
 
 # =========================================================
-# STATES
+# FSM STATES
 # =========================================================
 
-class PostCreate(StatesGroup):
-    waiting_text = State()
-
-
-class ButtonCreate(StatesGroup):
+class ButtonStates(StatesGroup):
     waiting_text = State()
     waiting_url = State()
     waiting_style = State()
+
+
+class PostStates(StatesGroup):
+    waiting_text = State()
+    waiting_photo = State()
 
 
 # =========================================================
 # ADMIN CHECK
 # =========================================================
 
-def is_admin(user_id: int):
+def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
 
 
@@ -90,59 +107,53 @@ def is_admin(user_id: int):
 # =========================================================
 
 def admin_menu():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📝 Create Post",
-                    callback_data="create_post",
-                    style=ButtonStyle.PRIMARY
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔘 Manage Buttons",
-                    callback_data="buttons",
-                    style=ButtonStyle.SUCCESS
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📢 Publish Post",
-                    callback_data="publish",
-                    style=ButtonStyle.SUCCESS
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="❌ Cancel",
-                    callback_data="cancel",
-                    style=ButtonStyle.DANGER
-                )
-            ]
-        ]
+
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text="📝 Create Post",
+        callback_data="create_post"
     )
 
+    builder.button(
+        text="🔘 Manage Buttons",
+        callback_data="manage_buttons"
+    )
+
+    builder.button(
+        text="📢 Publish Post",
+        callback_data="publish_post"
+    )
+
+    builder.button(
+        text="❌ Cancel",
+        callback_data="cancel_all"
+    )
+
+    builder.adjust(1)
+
+    return builder.as_markup()
+
 
 # =========================================================
-# START
+# /START
 # =========================================================
 
-@dp.message(CommandStart())
-async def start(message: Message):
+@dp.message(Command("start"))
+async def start_handler(message: Message):
 
     if not is_admin(message.from_user.id):
+
         await message.answer(
-            "👋 Welcome!\n\n"
-            "This bot is currently configured for the administrator."
+            "⛔ <b>Access Denied</b>\n\n"
+            "You are not authorized to use this bot."
         )
         return
 
     await message.answer(
-        "👑 <b>Admin Post Creator</b>\n\n"
+        "👑 <b>POST CREATOR ADMIN PANEL</b>\n\n"
         "Choose an option:",
-        reply_markup=admin_menu(),
-        parse_mode="HTML"
+        reply_markup=admin_menu()
     )
 
 
@@ -154,118 +165,150 @@ async def start(message: Message):
 async def create_post(callback: CallbackQuery, state: FSMContext):
 
     if not is_admin(callback.from_user.id):
+        await callback.answer("Access denied", show_alert=True)
         return
 
     await callback.message.answer(
-        "📝 Send the text/caption for your post.\n\n"
+        "📝 <b>Create Post</b>\n\n"
+        "Send the text/caption for your post.\n\n"
         "You can use HTML formatting."
     )
 
-    await state.set_state(PostCreate.waiting_text)
+    await state.set_state(PostStates.waiting_text)
 
     await callback.answer()
 
 
-@dp.message(PostCreate.waiting_text)
-async def receive_post_text(message: Message, state: FSMContext):
+@dp.message(PostStates.waiting_text)
+async def post_text_handler(message: Message, state: FSMContext):
 
     if not is_admin(message.from_user.id):
         return
 
-    text = message.html_text
-
-    cursor.execute(
-        "INSERT INTO posts (text) VALUES (?)",
-        (text,)
-    )
-
-    db.commit()
-
-    post_id = cursor.lastrowid
-
-    await state.update_data(post_id=post_id)
+    await state.update_data(post_text=message.html_text)
 
     await message.answer(
-        f"✅ Post created.\n\n"
-        f"Post ID: <code>{post_id}</code>\n\n"
-        "Now add buttons.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="➕ Add Button",
-                        callback_data=f"add_button:{post_id}",
-                        style=ButtonStyle.SUCCESS
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="📢 Publish",
-                        callback_data=f"publish:{post_id}",
-                        style=ButtonStyle.PRIMARY
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="❌ Cancel",
-                        callback_data="cancel",
-                        style=ButtonStyle.DANGER
-                    )
-                ]
-            ]
-        )
+        "🖼 <b>Photo is optional.</b>\n\n"
+        "Send a photo if you want an image post.\n"
+        "Or send /skip to create a text-only post."
     )
 
-    await state.clear()
+    await state.set_state(PostStates.waiting_photo)
+
+
+@dp.message(PostStates.waiting_photo, Command("skip"))
+async def skip_photo(message: Message, state: FSMContext):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    await state.update_data(photo_id=None)
+
+    await message.answer(
+        "✅ Post saved.\n\n"
+        "Now choose <b>Publish Post</b> from the admin panel."
+    )
+
+    await state.set_state(None)
+
+
+@dp.message(PostStates.waiting_photo, F.photo)
+async def photo_handler(message: Message, state: FSMContext):
+
+    if not is_admin(message.from_user.id):
+        return
+
+    photo_id = message.photo[-1].file_id
+
+    await state.update_data(photo_id=photo_id)
+
+    await message.answer(
+        "✅ Photo added.\n\n"
+        "Your post is ready."
+    )
+
+    await state.set_state(None)
 
 
 # =========================================================
 # ADD BUTTON
 # =========================================================
 
-@dp.callback_query(F.data.startswith("add_button:"))
-async def add_button(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "manage_buttons")
+async def manage_buttons(callback: CallbackQuery):
 
     if not is_admin(callback.from_user.id):
+        await callback.answer("Access denied", show_alert=True)
         return
 
-    post_id = int(callback.data.split(":")[1])
+    builder = InlineKeyboardBuilder()
 
-    await state.update_data(post_id=post_id)
-
-    await callback.message.answer(
-        "🔘 Send the button text.\n\n"
-        "Example:\n"
-        "<code>💰 Buy Now</code>",
-        parse_mode="HTML"
+    builder.button(
+        text="➕ Add Button",
+        callback_data="add_button"
     )
 
-    await state.set_state(ButtonCreate.waiting_text)
+    builder.button(
+        text="📋 Button List",
+        callback_data="button_list"
+    )
+
+    builder.button(
+        text="🔙 Back",
+        callback_data="back_admin"
+    )
+
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        "🔘 <b>Button Manager</b>\n\n"
+        "Manage your post buttons.",
+        reply_markup=builder.as_markup()
+    )
 
     await callback.answer()
 
 
-@dp.message(ButtonCreate.waiting_text)
-async def button_text(message: Message, state: FSMContext):
+@dp.callback_query(F.data == "add_button")
+async def add_button(callback: CallbackQuery, state: FSMContext):
+
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Access denied", show_alert=True)
+        return
+
+    await callback.message.answer(
+        "🔤 Send the button text.\n\n"
+        "Example:\n"
+        "<code>Join Channel</code>"
+    )
+
+    await state.set_state(ButtonStates.waiting_text)
+
+    await callback.answer()
+
+
+@dp.message(ButtonStates.waiting_text)
+async def button_text_handler(message: Message, state: FSMContext):
+
+    if not is_admin(message.from_user.id):
+        return
 
     await state.update_data(button_text=message.text)
 
     await message.answer(
         "🔗 Now send the button URL.\n\n"
         "Example:\n"
-        "https://example.com"
+        "<code>https://t.me/example</code>"
     )
 
-    await state.set_state(ButtonCreate.waiting_url)
+    await state.set_state(ButtonStates.waiting_url)
 
 
-# =========================================================
-# BUTTON URL
-# =========================================================
+@dp.message(ButtonStates.waiting_url)
+async def button_url_handler(message: Message, state: FSMContext):
 
-@dp.message(ButtonCreate.waiting_url)
-async def button_url(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
 
     url = message.text.strip()
 
@@ -275,78 +318,73 @@ async def button_url(message: Message, state: FSMContext):
         or url.startswith("tg://")
     ):
         await message.answer(
-            "❌ Invalid URL.\n"
-            "Please send a valid http://, https:// or tg:// URL."
+            "❌ Invalid URL.\n\n"
+            "Please send a valid http/https URL."
         )
         return
 
     await state.update_data(button_url=url)
 
-    await message.answer(
-        "🎨 Select button color:",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="🔵 Blue",
-                        callback_data="style:primary",
-                        style=ButtonStyle.PRIMARY
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="🟢 Green",
-                        callback_data="style:success",
-                        style=ButtonStyle.SUCCESS
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="🔴 Red",
-                        callback_data="style:danger",
-                        style=ButtonStyle.DANGER
-                    )
-                ]
-            ]
-        )
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text="🔵 Blue",
+        callback_data="style_primary"
     )
 
-    await state.set_state(ButtonCreate.waiting_style)
+    builder.button(
+        text="🟢 Green",
+        callback_data="style_success"
+    )
 
+    builder.button(
+        text="🔴 Red",
+        callback_data="style_danger"
+    )
 
-# =========================================================
-# BUTTON STYLE
-# =========================================================
+    builder.adjust(1)
+
+    await message.answer(
+        "🎨 Choose the button color:",
+        reply_markup=builder.as_markup()
+    )
+
+    await state.set_state(ButtonStates.waiting_style)
+
 
 @dp.callback_query(
-    ButtonCreate.waiting_style,
-    F.data.startswith("style:")
+    ButtonStates.waiting_style,
+    F.data.startswith("style_")
 )
-async def button_style(callback: CallbackQuery, state: FSMContext):
+async def button_style_handler(
+    callback: CallbackQuery,
+    state: FSMContext
+):
 
     if not is_admin(callback.from_user.id):
+        await callback.answer("Access denied", show_alert=True)
         return
 
-    style = callback.data.split(":")[1]
+    style = callback.data.replace("style_", "")
 
     data = await state.get_data()
 
-    post_id = data["post_id"]
-    button_text_value = data["button_text"]
-    button_url_value = data["button_url"]
+    text = data.get("button_text")
+    url = data.get("button_url")
+
+    if not text or not url:
+        await callback.message.answer(
+            "❌ Button data missing. Please try again."
+        )
+        await state.clear()
+        return
 
     cursor.execute(
         """
-        INSERT INTO buttons
-        (post_id, text, url, style)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO buttons (text, url, style)
+        VALUES (?, ?, ?)
         """,
-        (
-            post_id,
-            button_text_value,
-            button_url_value,
-            style
-        )
+        (text, url, style)
     )
 
     db.commit()
@@ -354,23 +392,71 @@ async def button_style(callback: CallbackQuery, state: FSMContext):
     await state.clear()
 
     await callback.message.answer(
-        "✅ Button added successfully!\n\n"
-        f"Text: {button_text_value}\n"
-        f"Style: {style}",
+        "✅ <b>Button Added!</b>\n\n"
+        f"Text: {text}\n"
+        f"Style: {style}\n"
+        f"URL: {url}"
+    )
+
+    await callback.answer()
+
+
+# =========================================================
+# BUTTON LIST
+# =========================================================
+
+@dp.callback_query(F.data == "button_list")
+async def button_list(callback: CallbackQuery):
+
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Access denied", show_alert=True)
+        return
+
+    cursor.execute(
+        "SELECT id, text, style, url FROM buttons ORDER BY id DESC"
+    )
+
+    rows = cursor.fetchall()
+
+    if not rows:
+
+        await callback.message.edit_text(
+            "🔘 <b>Button List</b>\n\n"
+            "No buttons added yet.",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🔙 Back",
+                            callback_data="manage_buttons"
+                        )
+                    ]
+                ]
+            )
+        )
+
+        await callback.answer()
+        return
+
+    text = "🔘 <b>Button List</b>\n\n"
+
+    for button_id, button_text, style, url in rows:
+
+        text += (
+            f"🆔 <b>{button_id}</b>\n"
+            f"Text: {button_text}\n"
+            f"Style: {style}\n"
+            f"URL: {url}\n\n"
+        )
+
+    await callback.message.edit_text(
+        text,
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="➕ Add Another Button",
-                        callback_data=f"add_button:{post_id}",
-                        style=ButtonStyle.SUCCESS
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="📢 Publish Now",
-                        callback_data=f"publish:{post_id}",
-                        style=ButtonStyle.PRIMARY
+                        text="🔙 Back",
+                        callback_data="manage_buttons"
                     )
                 ]
             ]
@@ -381,38 +467,37 @@ async def button_style(callback: CallbackQuery, state: FSMContext):
 
 
 # =========================================================
-# PUBLISH
+# PUBLISH POST
 # =========================================================
 
-@dp.callback_query(F.data.startswith("publish:"))
-async def publish(callback: CallbackQuery):
+@dp.callback_query(F.data == "publish_post")
+async def publish_post(callback: CallbackQuery, state: FSMContext):
 
     if not is_admin(callback.from_user.id):
+        await callback.answer("Access denied", show_alert=True)
         return
 
-    post_id = int(callback.data.split(":")[1])
+    data = await state.get_data()
 
-    cursor.execute(
-        "SELECT text FROM posts WHERE id=?",
-        (post_id,)
-    )
+    post_text = data.get("post_text")
+    photo_id = data.get("photo_id")
 
-    post = cursor.fetchone()
+    if not post_text:
 
-    if not post:
-        await callback.answer("Post not found!", show_alert=True)
+        await callback.message.answer(
+            "❌ No post is ready.\n\n"
+            "First use <b>Create Post</b>."
+        )
+
+        await callback.answer()
         return
-
-    text = post[0]
 
     cursor.execute(
         """
         SELECT text, url, style
         FROM buttons
-        WHERE post_id=?
         ORDER BY id ASC
-        """,
-        (post_id,)
+        """
     )
 
     rows = cursor.fetchall()
@@ -421,42 +506,57 @@ async def publish(callback: CallbackQuery):
 
     for button_text, url, style in rows:
 
-        keyboard.append([
-            InlineKeyboardButton(
-                text=button_text,
-                url=url,
-                style=style
-            )
-        ])
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=button_text,
+                    url=url,
+                    style=style
+                )
+            ]
+        )
 
     markup = None
 
     if keyboard:
+
         markup = InlineKeyboardMarkup(
             inline_keyboard=keyboard
         )
 
     try:
 
-        await bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=text,
-            reply_markup=markup,
-            parse_mode="HTML"
-        )
+        if photo_id:
+
+            await bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=photo_id,
+                caption=post_text,
+                reply_markup=markup
+            )
+
+        else:
+
+            await bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=post_text,
+                reply_markup=markup
+            )
 
         await callback.message.answer(
             "✅ <b>Published Successfully!</b>\n\n"
-            f"Post ID: <code>{post_id}</code>",
-            parse_mode="HTML"
+            "Your post has been sent to the channel."
         )
+
+        await state.clear()
 
     except Exception as e:
 
+        logging.exception("Publish error")
+
         await callback.message.answer(
-            "❌ Publishing failed.\n\n"
-            f"<code>{str(e)}</code>",
-            parse_mode="HTML"
+            "❌ <b>Publish failed.</b>\n\n"
+            f"<code>{str(e)}</code>"
         )
 
     await callback.answer()
@@ -466,16 +566,36 @@ async def publish(callback: CallbackQuery):
 # CANCEL
 # =========================================================
 
-@dp.callback_query(F.data == "cancel")
-async def cancel(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "cancel_all")
+async def cancel_all(callback: CallbackQuery, state: FSMContext):
 
     if not is_admin(callback.from_user.id):
+        await callback.answer("Access denied", show_alert=True)
         return
 
     await state.clear()
 
     await callback.message.answer(
-        "❌ Operation cancelled.",
+        "❌ Current operation cancelled."
+    )
+
+    await callback.answer()
+
+
+# =========================================================
+# BACK
+# =========================================================
+
+@dp.callback_query(F.data == "back_admin")
+async def back_admin(callback: CallbackQuery):
+
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Access denied", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        "👑 <b>POST CREATOR ADMIN PANEL</b>\n\n"
+        "Choose an option:",
         reply_markup=admin_menu()
     )
 
@@ -483,76 +603,30 @@ async def cancel(callback: CallbackQuery, state: FSMContext):
 
 
 # =========================================================
-# BUTTON MANAGEMENT
-# =========================================================
-
-@dp.callback_query(F.data == "buttons")
-async def manage_buttons(callback: CallbackQuery):
-
-    if not is_admin(callback.from_user.id):
-        return
-
-    cursor.execute(
-        "SELECT id, text FROM posts ORDER BY id DESC LIMIT 10"
-    )
-
-    posts = cursor.fetchall()
-
-    keyboard = []
-
-    for post_id, text in posts:
-
-        preview = text.replace("\n", " ")[:30]
-
-        keyboard.append([
-            InlineKeyboardButton(
-                text=f"📝 {post_id}: {preview}",
-                callback_data=f"publish:{post_id}",
-                style=ButtonStyle.PRIMARY
-            )
-        ])
-
-    if not keyboard:
-
-        await callback.message.answer(
-            "No posts available."
-        )
-
-    else:
-
-        await callback.message.answer(
-            "📋 Your posts:",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=keyboard
-            )
-        )
-
-    await callback.answer()
-
-
-# =========================================================
-# ERROR LOGGING
-# =========================================================
-
-@dp.errors()
-async def errors_handler(event):
-    logging.exception("Telegram error: %s", event.exception)
-
-
-# =========================================================
-# RUN
+# START BOT
 # =========================================================
 
 async def main():
 
-    logging.basicConfig(
-        level=logging.INFO
+    if BOT_TOKEN == "8859541151:AAGx_QDI0b3oL4UmGT8-dqd7l01Knqk6wyY":
+
+        logging.error(
+            "BOT_TOKEN is not configured."
+        )
+        return
+
+    logging.info("Bot is starting...")
+
+    await dp.start_polling(
+        bot,
+        allowed_updates=dp.resolve_used_update_types()
     )
-
-    print("Bot is starting...")
-
-    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+
+    try:
+        asyncio.run(main())
+
+    except KeyboardInterrupt:
+        logging.info("Bot stopped.")
