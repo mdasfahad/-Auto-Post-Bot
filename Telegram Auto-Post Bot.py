@@ -28,7 +28,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8859541151:AAGx_QDI0b3oL4UmGT8-dqd7l01Knqk6wyY")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@FreeIncome_TechBD)
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@FreeIncome_TechBD")
 
 # তোমার Admin ID
 ADMIN_ID = 8289191009
